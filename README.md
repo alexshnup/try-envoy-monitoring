@@ -2,6 +2,8 @@
 
 This project demonstrates the integration of Envoy Proxy with the Go-Control-Plane to dynamically manage configurations, particularly for a Redis cluster. The focus is on implementing TCP health checks to monitor the status of Redis nodes and update Envoy's configuration in response to changes in the Redis cluster.
 
+<img width="882" alt="image" src="https://github.com/alexshnup/try-envoy-monitoring/assets/4953963/b3d53cd2-0454-4bfe-9796-3f2693da0a93">
+
 ## Overview
 
 Envoy is used as a front proxy in this setup, routing traffic to a Redis cluster. The Go-Control-Plane serves as an xDS server to dynamically update Envoy's configuration, especially for handling changes in the Redis master node.
