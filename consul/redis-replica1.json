@@ -1,0 +1,12 @@
+{
+  "service": {
+    "name": "redis-replica1",
+    "tags": ["replica"],
+    "port": 6379,
+    "check": {
+      "tcp": "redis-replica1:6379",
+      "interval": "5s",
+      "timeout": "2s"
+    }
+  }
+}

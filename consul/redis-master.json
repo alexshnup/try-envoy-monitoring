@@ -1,0 +1,13 @@
+{
+    "service": {
+      "name": "redis-master",
+      "tags": ["master"],
+      "port": 6379,
+      "check": {
+        "tcp": "redis-master:6379",
+        "interval": "5s",
+        "timeout": "2s"
+      }
+    }
+  }
+  

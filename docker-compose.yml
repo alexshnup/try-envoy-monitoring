@@ -1,0 +1,202 @@
+version: '3'
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.28.0
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml
+    ports:
+      - 80:80
+      - 6000:6000
+      - 6666:6666
+      - 7777:7777
+      - 8000:8000
+      - 8001:8001
+    depends_on:
+      - redis-master
+      - redis-replica1
+      - redis-replica2
+  
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=secret
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - victoriametrics
+      - vmagent
+  
+  my-hugo-site:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "10000:10000"
+      
+  # consul:
+  #   image: hashicorp/consul:latest
+  #   ports:
+  #     - "8500:8500"
+  #   volumes:
+  #     - ./consul/redis-master.json:/consul/config/redis-master.json
+  #     - ./consul/redis-replica1.json:/consul/config/redis-replica1.json
+  #     - ./consul/redis-replica2.json:/consul/config/redis-replica2.json
+  
+  redis-go-control-plane:
+    build:
+      context: .
+      dockerfile: ./redis-go-control-plane/Dockerfile   
+    ports:
+      - "8002:8002"
+    environment:
+      REDIS_HOST_PORT_LIST: redis-master:6379,redis-replica1:6379,redis-replica2:6379
+      ENVOY_CLUSTERS_LIST: redis-master,redis-replica1,redis-replica2
+    command: 
+      - /bin/server
+      - nodeID=test-id
+    healthcheck:
+      test: nc -zv localhost 18000
+
+  # go-control-plane:
+  #   build:
+  #     context: .
+  #     dockerfile: ./envoy/examples/shared/golang/Dockerfile
+  #     target: golang-control-plane
+  #   command: /usr/local/bin/example
+  #   healthcheck:
+  #     test: nc -zv localhost 18000
+  
+
+  # etcd:
+  #   image: quay.io/coreos/etcd:latest
+  #   volumes:
+  #     - etcd-data:/etcd-data
+  #   environment:
+  #     ETCD_DATA_DIR: /etcd-data
+  #     ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+  #     ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+  #   ports:
+  #     - "2379:2379"
+  #     - "2380:2380"
+  #   command:
+  #     - /usr/local/bin/etcd
+  #     - --name=etcd0
+  #     - --listen-client-urls=http://0.0.0.0:2379
+  #     - --advertise-client-urls=http://etcd:2379
+  #     - --listen-peer-urls=http://0.0.0.0:2380
+  #     - --initial-advertise-peer-urls=http://etcd:2380
+  #     - --initial-cluster=etcd0=http://etcd:2380
+  #     - --initial-cluster-token=my-etcd-token
+  #     - --initial-cluster-state=new
+  
+  # consul-integration:
+  #   build: ./redis-consul-integration/
+  #   depends_on:
+  #     - redis-sentinel1
+  #     - consul
+
+  redis-master:
+    ports:
+      - "7000:6379"
+    hostname: redis-master
+    image: redis:latest
+    # volumes:
+    #   - ./create-cluster.sh:/usr/local/bin/create-cluster.sh
+      # - redis-node-1-data:/data
+    # entrypoint: /usr/local/bin/create-cluster.sh redis-node-1 redis-node-2 redis-node-3
+    # extra_hosts:
+    #   - "redis-server: 127.0.0.1"
+
+
+  redis-replica1:
+    ports:
+      - "7001:6379"
+    hostname: redis-replica1
+    image: redis:latest
+    command: redis-server --slaveof redis-master 6379
+    # volumes:
+    #   - ./create-cluster.sh:/usr/local/bin/create-cluster.sh
+      # - redis-node-2-data:/data
+    # entrypoint: /usr/local/bin/create-cluster.sh redis-node-1 redis-node-2 redis-node-3
+    # extra_hosts:
+    #   - "redis-server: 127.0.0.1"
+
+  redis-replica2:
+    ports:
+      - "7002:6379"
+    hostname: redis-replica2
+    image: redis:latest
+    command: redis-server --slaveof redis-master 6379
+    # volumes:
+    #   - ./create-cluster.sh:/usr/local/bin/create-cluster.sh
+      # - redis-node-3-data:/data
+    # entrypoint: /usr/local/bin/create-cluster.sh redis-node-1 redis-node-2 redis-node-3
+    # extra_hosts:
+    #   - "redis-server: 127.0.0.1"
+
+  redis-sentinel1:
+    ports:
+      - "26379:26379"
+    hostname: redis-sentinel1
+    image: redis:latest
+    command: redis-sentinel /etc/redis/sentinel.conf
+    # command: tail -f /dev/null
+    depends_on:
+      - redis-master
+    volumes:
+      - ./sentinel.conf:/etc/redis/sentinel.conf
+
+  redis-sentinel2:
+    ports:
+      - "36379:26379"
+    hostname: redis-sentinel2
+    image: redis:latest
+    command: redis-sentinel /etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+    volumes:
+      - ./sentinel.conf:/etc/redis/sentinel.conf
+
+  redis-sentinel3:
+    ports:
+      - "46379:26379"
+    hostname: redis-sentinel3
+    image: redis:latest
+    command: redis-sentinel /etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+    volumes:
+      - ./sentinel.conf:/etc/redis/sentinel.conf
+  
+  victoriametrics:
+    image: victoriametrics/victoria-metrics
+    volumes:
+      - victoria_data:/vm_data
+      # no need, vmagent will send data to this container
+      # - ./victoriametrics.yml:/victoriametrics.yml
+    ports:
+      - "8428:8428"
+    # no need, vmagent will send data to this container
+    # command:
+      # - '-promscrape.config=/victoriametrics.yml'
+
+  vmagent:
+    image: victoriametrics/vmagent
+    command:
+      - '-promscrape.config=/etc/vmagent/config.yml'
+      - '-remoteWrite.url=http://victoriametrics:8428/api/v1/write'
+    volumes:
+      - ./victoriametrics.yml:/etc/vmagent/config.yml
+    ports:
+      - "8429:8429"
+
+volumes:
+  victoria_data:  
+  redis-node-1-data:
+  redis-node-2-data:
+  redis-node-3-data:
+  grafana_data:
+  # etcd-data:

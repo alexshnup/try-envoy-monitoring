@@ -1,0 +1,202 @@
+// Copyright 2020 Envoyproxy Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+package example
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/go-redis/redis"
+	"github.com/golang/protobuf/ptypes"
+
+	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
+	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
+	tcp_proxy "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
+
+	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
+	cache "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
+	resource "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
+)
+
+const (
+	ClusterName  = "redis_cluster"
+	RouteName    = "local_route"
+	ListenerName = "listener_0"
+	ListenerPort = 8000
+	UpstreamHost = "redis-master"
+	UpstreamPort = 6379
+)
+
+func makeCluster(clusterName string) *cluster.Cluster {
+	return &cluster.Cluster{
+		Name:                 clusterName,
+		ConnectTimeout:       ptypes.DurationProto(5 * time.Second),
+		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_LOGICAL_DNS},
+		LbPolicy:             cluster.Cluster_ROUND_ROBIN,
+		LoadAssignment:       makeEndpoint(clusterName),
+		DnsLookupFamily:      cluster.Cluster_V4_ONLY,
+	}
+}
+
+func makeEndpoint(clusterName string) *endpoint.ClusterLoadAssignment {
+	return &endpoint.ClusterLoadAssignment{
+		ClusterName: clusterName,
+		Endpoints: []*endpoint.LocalityLbEndpoints{{
+			LbEndpoints: []*endpoint.LbEndpoint{{
+				HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+					Endpoint: &endpoint.Endpoint{
+						Address: &core.Address{
+							Address: &core.Address_SocketAddress{
+								SocketAddress: &core.SocketAddress{
+									Protocol: core.SocketAddress_TCP,
+									Address:  UpstreamHost,
+									PortSpecifier: &core.SocketAddress_PortValue{
+										PortValue: UpstreamPort,
+									},
+								},
+							},
+						},
+					},
+				},
+			}},
+		}},
+	}
+}
+
+func makeTCPListener(listenerName string) *listener.Listener {
+	tcpProxyConfig := &tcp_proxy.TcpProxy{
+		StatPrefix: "tcp_proxy",
+		ClusterSpecifier: &tcp_proxy.TcpProxy_Cluster{
+			Cluster: ClusterName,
+		},
+	}
+
+	tcpProxyConfigPbst, err := ptypes.MarshalAny(tcpProxyConfig)
+	if err != nil {
+		// handle error
+	}
+
+	return &listener.Listener{
+		Name: listenerName,
+		Address: &core.Address{
+			Address: &core.Address_SocketAddress{
+				SocketAddress: &core.SocketAddress{
+					Protocol: core.SocketAddress_TCP,
+					Address:  "0.0.0.0",
+					PortSpecifier: &core.SocketAddress_PortValue{
+						PortValue: ListenerPort,
+					},
+				},
+			},
+		},
+		FilterChains: []*listener.FilterChain{{
+			Filters: []*listener.Filter{{
+				Name: wellknown.TCPProxy,
+				ConfigType: &listener.Filter_TypedConfig{
+					TypedConfig: tcpProxyConfigPbst,
+				},
+			}},
+		}},
+	}
+}
+
+func makeConfigSource() *core.ConfigSource {
+	source := &core.ConfigSource{}
+	source.ResourceApiVersion = resource.DefaultAPIVersion
+	source.ConfigSourceSpecifier = &core.ConfigSource_ApiConfigSource{
+		ApiConfigSource: &core.ApiConfigSource{
+			TransportApiVersion:       resource.DefaultAPIVersion,
+			ApiType:                   core.ApiConfigSource_GRPC,
+			SetNodeOnFirstMessageOnly: true,
+			GrpcServices: []*core.GrpcService{{
+				TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+					EnvoyGrpc: &core.GrpcService_EnvoyGrpc{ClusterName: "xds_cluster"},
+				},
+			}},
+		},
+	}
+	return source
+}
+
+func GenerateSnapshot() cache.Snapshot {
+
+	go func() {
+		for {
+			fmt.Println("Check Redis master node")
+			updateEnvoyConfigWithRedisMaster()
+			time.Sleep(time.Minute) // Polling interval
+		}
+	}()
+
+	//just for debug
+	data := makeTCPListener(ListenerName)
+	jsonString, err := json.Marshal(data)
+	if err != nil {
+		// panic(err)
+		fmt.Println("err", err)
+	}
+	fmt.Printf("=============%s\n", jsonString)
+
+	out := cache.NewSnapshot(
+		"3",
+		[]types.Resource{}, // endpoints
+		[]types.Resource{makeCluster(ClusterName)},
+
+		[]types.Resource{}, // routes
+
+		[]types.Resource{makeTCPListener(ListenerName)},
+
+		[]types.Resource{}, // runtimes
+		[]types.Resource{}, // secrets
+		[]types.Resource{}, // extensions configs
+	)
+	return out
+}
+
+func updateEnvoyClusterConfig(masterNode string) {
+	// Update Envoy configuration with the new master node
+	fmt.Printf("Updating Envoy configuration with the new master node: %s\n", masterNode)
+}
+
+func updateEnvoyConfigWithRedisMaster() {
+	var masterNode string
+
+	// List of your Redis nodes
+	redisNodes := []string{"redis-master:6379", "redis-replica-1:6379", "redis-replica-2:6379"}
+
+	for _, addr := range redisNodes {
+		client := redis.NewClient(&redis.Options{Addr: addr})
+		info, err := client.Info(context.Background(), "replication").Result()
+		if err != nil {
+			// handle error
+			continue
+		}
+
+		if strings.Contains(info, "role:master") {
+			masterNode = addr
+			break
+		}
+	}
+
+	if masterNode != "" {
+		// Update Envoy configuration with the new master node
+		example.updateEnvoyClusterConfig(masterNode)
+	}
+}

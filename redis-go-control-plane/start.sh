@@ -1,0 +1,1 @@
+REDIS_HOST_PORT_LIST=localhost:7000,localhost:7001,localhost:7002 ENVOY_CLUSTERS_LIST=redis_master,redis-replica1,redis-replica2 go run main.go
