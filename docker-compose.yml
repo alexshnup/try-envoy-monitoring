@@ -29,12 +29,12 @@ services:
       - victoriametrics
       - vmagent
   
-  my-hugo-site:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "10000:10000"
+  # my-hugo-site:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "10000:10000"
       
   # consul:
   #   image: hashicorp/consul:latest
